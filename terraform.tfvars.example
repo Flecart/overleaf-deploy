@@ -1,14 +1,85 @@
 # Copy this file to terraform.tfvars and fill in your values
 # cp terraform.tfvars.example terraform.tfvars
 
-aws_region    = "us-east-1"
-instance_type = "t3.xlarge"     # 4 vCPU, 16GB RAM — recommended for building from source
-key_name      = "my-keypair"    # REQUIRED: name of your existing EC2 Key Pair
+# -------------------------------------------------------------------
+# Required Variables
+# -------------------------------------------------------------------
+
+aws_region    = "eu-central-1"
+instance_type = "t3.medium"     # 2 vCPU, 4GB RAM — better for building
+key_name      = "overleaf-key"  # EC2 Key Pair for SSH access
 admin_email   = "admin@example.com"
+
+# -------------------------------------------------------------------
+# Network Security
+# -------------------------------------------------------------------
 
 # Restrict SSH to your IP for security (recommended)
 # Find your IP: curl -s ifconfig.me
-# allowed_ssh_cidrs = ["203.0.113.42/32"]
+allowed_ssh_cidrs = ["0.0.0.0/0"]  # Change to ["YOUR.IP.ADDRESS/32"]
+
+# -------------------------------------------------------------------
+# Storage Configuration
+# -------------------------------------------------------------------
 
 # Disk size in GB (Overleaf + TexLive + Docker images need ~30GB)
-# root_volume_size = 50
+root_volume_size = 40
+data_volume_size = 50  # Persistent data (MongoDB, uploads, projects)
+
+# -------------------------------------------------------------------
+# S3 Storage Configuration (Recommended for Production)
+# -------------------------------------------------------------------
+
+# Enable S3 storage for data persistence across machine rebuilds
+# When enabled, all Overleaf data (files, projects, history) will be stored in S3
+# This allows you to destroy and recreate the EC2 instance without losing data
+enable_s3_storage = true
+
+# Prefix for S3 bucket names (must be globally unique)
+# Will create: {prefix}-user-files, {prefix}-template-files, 
+#              {prefix}-project-blobs, {prefix}-chunks
+s3_bucket_prefix = "overleaf"  # Change to something unique like "myorg-overleaf"
+
+# -------------------------------------------------------------------
+# Deployment Speed Optimization
+# -------------------------------------------------------------------
+
+# Pre-built images: Public images available (saves ~15 min per deploy)
+# Images are public at ghcr.io/flecart/overleaf - no authentication needed
+use_prebuilt_images  = true
+docker_image_prefix  = "ghcr.io/flecart/overleaf"
+docker_image_tag     = "ai-tutor"
+
+# -------------------------------------------------------------------
+# Email / SMTP Configuration (Optional - for sending emails)
+# -------------------------------------------------------------------
+
+# Test your credentials first with: python3 scripts/test_gmail_smtp.py
+# Leave empty to disable email functionality
+
+# Gmail example: Create an App Password at https://myaccount.google.com/apppasswords
+# (Requires 2-Step Verification enabled on your Google account)
+
+overleaf_email_from_address     = ""  # e.g., "noreply@example.com"
+overleaf_smtp_host              = ""  # e.g., "smtp.gmail.com"
+overleaf_smtp_port              = 587 # 587 for STARTTLS, 465 for SSL/TLS
+overleaf_smtp_secure            = false  # false = STARTTLS, true = SSL/TLS
+overleaf_smtp_user              = ""  # e.g., "your-email@gmail.com"
+overleaf_smtp_pass              = ""  # Gmail App Password (16 chars, no spaces)
+overleaf_smtp_tls_reject_unauth = true
+overleaf_smtp_ignore_tls        = false
+
+# -------------------------------------------------------------------
+# User Registration & Access Control
+# -------------------------------------------------------------------
+
+# Require email confirmation before users can use their account
+# Note: Requires SMTP to be configured to send confirmation emails
+email_confirmation_disabled = true  # Set to false to require email verification
+
+# Restrict registration to specific email domains (comma-separated, no spaces)
+# Examples:
+#   allowed_email_domains = "example.com"              # Only @example.com
+#   allowed_email_domains = "gmail.com,yahoo.com"      # Multiple domains
+#   allowed_email_domains = ""                         # Allow all domains (default)
+allowed_email_domains = ""

@@ -10,3 +10,11 @@ override.tf
 override.tf.json
 *_override.tf
 *_override.tf.json
+
+*.pem
+.env
+
+*/test_gmail_smtp.py
+.agents/private
+
+manual_deploy.sh

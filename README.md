@@ -1,6 +1,6 @@
 # Overleaf AI Tutor — Terraform AWS Deployment
 
-Deploys the [jiarui-liu/overleaf (add-ai-tutor-frontend)](https://github.com/jiarui-liu/overleaf/tree/add-ai-tutor-frontend) fork on an AWS EC2 instance using Docker.
+Deploys the [flecart/overleaf (add-ai-tutor-frontend)](https://github.com/flecart/overleaf/tree/add-ai-tutor-frontend) fork on an AWS EC2 instance using Docker.
 
 ## Prerequisites
 
@@ -17,7 +17,10 @@ cd overleaf-terraform
 cp terraform.tfvars.example terraform.tfvars
 # Edit terraform.tfvars — at minimum set key_name and admin_email
 
-# 2. Initialize and deploy
+# 2. (Optional) Test SMTP credentials if configuring email
+python3 scripts/test_gmail_smtp.py
+
+# 3. Initialize and deploy
 terraform init
 terraform plan
 terraform apply
@@ -86,7 +89,45 @@ terraform destroy
 | `admin_email` | `admin@example.com` | Overleaf admin email |
 | `allowed_ssh_cidrs` | `["0.0.0.0/0"]` | CIDRs allowed to SSH |
 | `root_volume_size` | `50` | Root EBS volume size in GB |
+| `data_volume_size` | `50` | Persistent data volume size in GB |
 | `project_name` | `overleaf-ai-tutor` | Name prefix for AWS resources |
+| `use_prebuilt_images` | `false` | Use pre-built Docker images |
+| `docker_image_prefix` | `""` | Docker registry prefix for images |
+| `docker_image_tag` | `"ai-tutor"` | Docker image tag |
+
+### S3 Storage Configuration (Recommended for Production)
+
+| Variable | Default | Description |
+|---|---|---|
+| `enable_s3_storage` | `true` | Enable S3 storage backend for data persistence |
+| `s3_bucket_prefix` | `"overleaf"` | Prefix for S3 bucket names (must be globally unique) |
+
+**Why use S3?**
+- Data persists even when EC2 instance is destroyed and recreated
+- Unlimited scalability without managing disk space
+- 99.999999999% (11 9's) durability
+- Pay only for what you use (~$2-3/month for 50GB)
+
+See [S3_STORAGE_GUIDE.md](./S3_STORAGE_GUIDE.md) for detailed setup and migration instructions.
+
+### Email / SMTP Configuration (Optional)
+
+| Variable | Default | Description |
+|---|---|---|
+| `overleaf_email_from_address` | `""` | Email address shown as sender |
+| `overleaf_smtp_host` | `""` | SMTP server hostname (e.g., smtp.gmail.com) |
+| `overleaf_smtp_port` | `587` | SMTP port (587 for STARTTLS) |
+| `overleaf_smtp_secure` | `false` | Use SSL/TLS (false = STARTTLS) |
+| `overleaf_smtp_user` | `""` | SMTP username (sensitive) |
+| `overleaf_smtp_pass` | `""` | SMTP password/app password (sensitive) |
+| `overleaf_smtp_tls_reject_unauth` | `true` | Reject unauthorized TLS certs |
+| `overleaf_smtp_ignore_tls` | `false` | Ignore TLS (not recommended) |
+
+**Gmail Setup:**
+1. Enable 2-Step Verification on your Google account
+2. Create an App Password at https://myaccount.google.com/apppasswords
+3. Test credentials with: `python3 scripts/test_gmail_smtp.py`
+4. Add credentials to `terraform.tfvars`
 
 ## Architecture
 
@@ -94,28 +135,44 @@ terraform destroy
 Internet
     │
     ▼
-┌─────────────────────────┐
-│   AWS VPC  10.0.0.0/16  │
-│  ┌───────────────────┐  │
-│  │  Public Subnet     │  │
-│  │  10.0.1.0/24       │  │
-│  │  ┌──────────────┐  │  │
-│  │  │  EC2 Instance │  │  │
-│  │  │  (Ubuntu)     │  │  │
-│  │  │              │  │  │
-│  │  │  Docker:     │  │  │
-│  │  │  - web       │  │  │
-│  │  │  - mongo     │  │  │
-│  │  │  - redis     │  │  │
-│  │  │  - clsi      │  │  │
-│  │  │  - ...       │  │  │
-│  │  └──────────────┘  │  │
-│  └───────────────────┘  │
-└─────────────────────────┘
+┌─────────────────────────────────────────┐
+│   AWS VPC  10.0.0.0/16                  │
+│  ┌───────────────────────────────────┐  │
+│  │  Public Subnet 10.0.1.0/24         │  │
+│  │  ┌──────────────────────────────┐  │  │
+│  │  │  EC2 Instance (Ubuntu)        │  │  │
+│  │  │                               │  │  │
+│  │  │  Docker Compose:              │  │  │
+│  │  │  - web (Overleaf app)         │◄─┼──┼─── S3 Buckets (optional)
+│  │  │  - mongo (MongoDB 8.0)        │  │  │    - user-files
+│  │  │  - redis (cache)              │  │  │    - template-files
+│  │  │  - clsi (LaTeX compiler)      │  │  │    - project-blobs
+│  │  │  - filestore, history, etc.   │  │  │    - chunks
+│  │  │                               │  │  │
+│  │  │  EBS Volume (persistent)      │  │  │
+│  │  │  - MongoDB data               │  │  │
+│  │  └──────────────────────────────┘  │  │
+│  └───────────────────────────────────┘  │
+└─────────────────────────────────────────┘
 ```
+
+**Storage Options:**
+- **EBS Only**: Data volume persists with `prevent_destroy` lifecycle
+- **EBS + S3** (Recommended): Project files in S3, MongoDB on EBS
+  - Enables easy migration and rebuilds without data loss
+  - See [S3_STORAGE_GUIDE.md](./S3_STORAGE_GUIDE.md) for details
 
 ## Cost Estimate
 
+### Compute & Storage
 - **t3.xlarge** in us-east-1: ~$0.1664/hr (~$120/month)
 - **50GB gp3 EBS**: ~$4/month
-- Remember to `terraform destroy` when not in use!
+
+### S3 Storage (if enabled)
+- **Storage**: ~$0.023/GB/month (~$1.15/month for 50GB)
+- **Requests**: ~$1-2/month for typical usage
+- **Total S3**: ~$2-3/month for small team
+
+**Total (with S3)**: ~$126/month for continuous use
+
+**Tip**: Run `terraform destroy` when not in use to save costs!
