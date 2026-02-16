@@ -36,8 +36,120 @@ usermod -aG docker ubuntu
 
 echo "[2/6] Docker installed: $(docker --version)"
 
+# --- Install and configure LiteLLM ---
+echo "[3/8] Installing LiteLLM proxy server..."
+apt-get install -y python3 python3-pip python3-venv
+pip3 install --upgrade pip
+pip3 install 'litellm[proxy]'
+
+# Create LiteLLM config directory
+mkdir -p /opt/litellm
+cat > /opt/litellm/config.yaml << 'LITELLMEOF'
+model_list:
+  # OpenAI GPT-4o models (matches AI Tutor dropdown)
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: ${OPENAI_API_KEY}
+
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: ${OPENAI_API_KEY}
+
+  # OpenAI GPT-4.1 models (if available in your OpenAI account)
+  - model_name: gpt-4.1
+    litellm_params:
+      model: openai/gpt-4.1
+      api_key: ${OPENAI_API_KEY}
+
+  - model_name: gpt-4.1-mini
+    litellm_params:
+      model: openai/gpt-4.1-mini
+      api_key: ${OPENAI_API_KEY}
+
+  # OpenAI GPT-5.2 models (if available in your OpenAI account)
+  - model_name: gpt-5.2
+    litellm_params:
+      model: openai/gpt-5.2
+      api_key: ${OPENAI_API_KEY}
+
+  - model_name: gpt-5.2-chat-latest
+    litellm_params:
+      model: openai/gpt-5.2-chat-latest
+      api_key: ${OPENAI_API_KEY}
+
+  # Legacy models for backwards compatibility
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4
+      api_key: ${OPENAI_API_KEY}
+
+  - model_name: gpt-4-turbo
+    litellm_params:
+      model: openai/gpt-4-turbo-preview
+      api_key: ${OPENAI_API_KEY}
+
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_key: ${OPENAI_API_KEY}
+
+  # Anthropic Claude models (optional - uncomment if you have Anthropic API key)
+  # - model_name: claude-3-opus
+  #   litellm_params:
+  #     model: anthropic/claude-3-opus-20240229
+  #     api_key: ${ANTHROPIC_API_KEY}
+  #
+  # - model_name: claude-3-sonnet
+  #   litellm_params:
+  #     model: anthropic/claude-3-sonnet-20240229
+  #     api_key: ${ANTHROPIC_API_KEY}
+
+litellm_settings:
+  drop_params: true
+  set_verbose: true
+  request_timeout: 600
+
+general_settings:
+  master_key: ${LITELLM_MASTER_KEY}
+
+  # Cost tracking and budget limits
+  max_budget: 0.0  # Maximum total spend in USD (0 = no spending allowed)
+  budget_duration: 30d  # Reset budget every 30 days
+LITELLMEOF
+
+# Create systemd service for LiteLLM
+cat > /etc/systemd/system/litellm.service << 'SERVICEEOF'
+[Unit]
+Description=LiteLLM Proxy Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/litellm
+Environment="OPENAI_API_KEY=${OPENAI_API_KEY}"
+Environment="LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}"
+Environment="ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}"
+ExecStart=/usr/local/bin/litellm --config /opt/litellm/config.yaml --port 4000 --host 0.0.0.0
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+SERVICEEOF
+
+# Reload systemd and start LiteLLM
+systemctl daemon-reload
+systemctl enable litellm
+systemctl start litellm
+
+echo "LiteLLM proxy server installed and started on port 4000"
+echo "LiteLLM status: $(systemctl is-active litellm)"
+
 # --- Clone the Overleaf fork ---
-echo "[3/6] Cloning overleaf (add-ai-tutor-frontend branch)..."
+echo "[4/8] Cloning overleaf (add-ai-tutor-frontend branch)..."
 OVERLEAF_DIR="/opt/overleaf"
 git clone --single-branch --depth 1 \
   https://github.com/flecart/overleaf.git "$OVERLEAF_DIR"
@@ -45,7 +157,7 @@ git clone --single-branch --depth 1 \
 cd "$OVERLEAF_DIR/develop"
 
 # --- Configure SMTP/Email environment variables ---
-echo "[4/6] Configuring email/SMTP settings..."
+echo "[5/8] Configuring email/SMTP settings..."
 
 # Create .env file with SMTP and S3 configuration
 cat > /opt/overleaf/.env << 'ENVEOF'
@@ -95,6 +207,38 @@ source /opt/overleaf/.env
 # Create symlink for compatibility with overleaf repo structure
 ln -sf /opt/overleaf/.env /opt/overleaf/.env_credentials
 
+# Add OpenAI API key to .env_credentials if provided
+if [ -n "${OPENAI_API_KEY}" ]; then
+  echo "Adding OpenAI API key for AI Tutor features..."
+  echo "" >> /opt/overleaf/.env_credentials
+  echo "# OpenAI API Key for AI Tutor" >> /opt/overleaf/.env_credentials
+  echo "export OPENAI_API_KEY=${OPENAI_API_KEY}" >> /opt/overleaf/.env_credentials
+  
+  # Add custom base URL if provided (for LiteLLM proxy or other OpenAI-compatible endpoints)
+  if [ -n "${OPENAI_BASE_URL}" ]; then
+    echo "export OPENAI_BASE_URL=${OPENAI_BASE_URL}" >> /opt/overleaf/.env_credentials
+    echo "OpenAI API key and custom base URL configured"
+  else
+    echo "OpenAI API key configured (using default OpenAI endpoint)"
+  fi
+else
+  echo "No OpenAI API key provided - AI Tutor features will not work"
+fi
+
+# Patch AI Tutor to support custom base URL
+if [ -n "${OPENAI_BASE_URL}" ]; then
+  echo "Patching AI Tutor to use custom OpenAI base URL..."
+  AI_TUTOR_FILE="$OVERLEAF_DIR/services/web/app/src/Features/Chat/AiTutorReviewOrchestrator.mjs"
+  if [ -f "$AI_TUTOR_FILE" ]; then
+    # Replace: const openai = createOpenAI({ apiKey })
+    # With: const openai = createOpenAI({ apiKey, baseURL: process.env.OPENAI_BASE_URL })
+    sed -i 's/const openai = createOpenAI({ apiKey })/const openai = createOpenAI({ apiKey, baseURL: process.env.OPENAI_BASE_URL })/' "$AI_TUTOR_FILE"
+    echo "AI Tutor patched to support custom base URL"
+  else
+    echo "Warning: AI Tutor file not found at expected location"
+  fi
+fi
+
 if [ -n "${OVERLEAF_EMAIL_SMTP_HOST}" ] && [ -n "${OVERLEAF_EMAIL_SMTP_USER}" ]; then
   echo "SMTP configuration loaded from environment variables"
 else
@@ -112,28 +256,35 @@ if [ -f dev.env ]; then
   else
     echo "SANDBOXED_COMPILES=false" >> dev.env
   fi
+else
+  # Create dev.env if it doesn't exist
+  touch dev.env
+  echo "SANDBOXED_COMPILES=false" >> dev.env
 fi
 
-# --- Fix MongoDB version and configure replica set ---
-echo "Ensuring MongoDB 8.0 with replica set configuration..."
+# Add customization settings to dev.env
+echo "Adding customization settings to dev.env..."
+cat >> dev.env << 'CUSTOMEOF'
 
-# Create docker-compose override for MongoDB configuration
-cat > docker-compose.mongo-rs.yml << 'MONGOEOF'
-services:
-  mongo:
-    image: mongo:8.0
-    command: ["mongod", "--replSet", "overleaf"]
-MONGOEOF
+# Customization Settings
+APP_NAME=EuroSafeAI Intelligent Overleaf
+OVERLEAF_APP_NAME=EuroSafeAI Intelligent Overleaf
+OVERLEAF_NAV_TITLE=EuroSafeAI Intelligent Overleaf
+OVERLEAF_HEADER_IMAGE_URL=https://eurosafeai.github.io/images/logo.png
+OVERLEAF_ADMIN_EMAIL=eurosafeai.zurich@gmail.com
+OVERLEAF_ALLOW_PUBLIC_ACCESS=true
 
-echo "Created MongoDB replica set override configuration"
+# Email Configuration
+EMAIL_CONFIRMATION_DISABLED=${EMAIL_CONFIRMATION_DISABLED}
 
-# Clean old MongoDB data to prevent version conflicts (exit code 62)
-# This removes incompatible data from older MongoDB versions
-rm -rf ~/mongo_data ~/sharelatex_data
-echo "Cleaned old MongoDB data to ensure fresh MongoDB 8.0 start with replica set mode"
+# Allowed Email Domains (comma-separated, no spaces)
+SHARELATEX_ALLOWED_EMAIL_DOMAINS=${SHARELATEX_ALLOWED_EMAIL_DOMAINS}
+CUSTOMEOF
+
+echo "Customization settings added to dev.env"
 
 # --- Build or pull images ---
-echo "[5/6] Building/pulling container images..."
+echo "[6/8] Building/pulling container images..."
 if [ "${USE_PREBUILT_IMAGES}" = "true" ] && [ -n "${DOCKER_IMAGE_PREFIX}" ]; then
   echo "Pulling pre-built images from Docker Hub (~2-5 min)..."
   # Write override to use pre-built images instead of building
@@ -177,7 +328,7 @@ OVERRIDEEOF
   fi
   COMPOSE_FILES="-f docker-compose.yml -f $OVERRIDE"
 else
-  echo "[5/6] Building Overleaf containers (this takes 10-20 minutes)..."
+  echo "[6/8] Building Overleaf containers (this takes 10-20 minutes)..."
   bin/build
   # Build texlive image if the Dockerfile exists
   if [ -d texlive ]; then
@@ -186,7 +337,7 @@ else
 fi
 
 # --- Start services ---
-echo "[6/6] Starting Overleaf services..."
+echo "[7/8] Starting Overleaf services..."
 
 # Source environment variables before starting docker-compose
 if [ -f /opt/overleaf/.env ]; then
@@ -196,76 +347,101 @@ if [ -f /opt/overleaf/.env ]; then
 fi
 
 if [ "${USE_PREBUILT_IMAGES}" = "true" ] && [ -n "${DOCKER_IMAGE_PREFIX}" ]; then
-  docker compose -f docker-compose.yml -f docker-compose.prebuilt.yml -f docker-compose.mongo-rs.yml up -d
+  docker compose -f docker-compose.yml -f docker-compose.prebuilt.yml up -d
 else
-  # For local builds, also include MongoDB replica set override
-  docker compose -f docker-compose.yml -f docker-compose.mongo-rs.yml up -d
+  bin/up -d
 fi
 
 # --- Initialize MongoDB Replica Set ---
 echo "Waiting for MongoDB to be ready..."
-sleep 30
+sleep 20
 
 echo "Initializing MongoDB replica set (required for Overleaf transactions)..."
-# Compose file references for commands
-COMPOSE_CMD="docker compose -f docker-compose.yml -f docker-compose.mongo-rs.yml"
-if [ "${USE_PREBUILT_IMAGES}" = "true" ] && [ -n "${DOCKER_IMAGE_PREFIX}" ]; then
-  COMPOSE_CMD="docker compose -f docker-compose.yml -f docker-compose.prebuilt.yml -f docker-compose.mongo-rs.yml"
-fi
-
-# Retry up to 15 times to initialize the replica set
-for i in {1..15}; do
-  # First check if MongoDB is accepting connections
-  if $COMPOSE_CMD exec -T mongo mongosh --quiet --eval 'db.adminCommand("ping")' 2>/dev/null | grep -q 'ok.*1'; then
-    echo "MongoDB is responding, attempting to initialize replica set..."
-    # Try to initialize the replica set
-    RESULT=$($COMPOSE_CMD exec -T mongo mongosh --quiet --eval 'rs.initiate({ _id: "overleaf", members: [{ _id: 0, host: "mongo:27017" }] })' 2>&1)
-    if echo "$RESULT" | grep -q '"ok".*1\|already initialized'; then
-      echo "MongoDB replica set initialized successfully"
-      break
-    else
-      echo "Attempt $i: Replica set init failed: $RESULT"
-    fi
+# Retry up to 10 times to initialize the replica set
+for i in {1..10}; do
+  if docker compose exec -T mongo mongosh --eval 'rs.initiate({ _id: "overleaf", members: [{ _id: 0, host: "mongo:27017" }] })' 2>&1 | grep -q '"ok"'; then
+    echo "MongoDB replica set initialized successfully"
+    break
   else
-    echo "Attempt $i: MongoDB not ready yet..."
+    echo "Attempt $i failed, retrying in 5 seconds..."
+    sleep 5
   fi
-  sleep 10
 done
 
-# Wait for containers to be healthy
-echo "Waiting for services to become healthy..."
-sleep 30
+# # Wait for containers to be healthy
+# echo "Waiting for services to become healthy..."
+# sleep 30
 
 # --- Post-start configuration ---
 echo "Running post-start configuration..."
 
 # Fix upload directory permissions
-$COMPOSE_CMD exec -T --user root web bash -c \
+docker compose exec -T --user root web bash -c \
   "mkdir -p /overleaf/services/web/data/uploads && chmod 777 /overleaf/services/web/data/uploads" \
   || echo "Upload dir fix will be applied after web is ready"
 
+# Fix history bucket directory permissions
+echo "Setting up history-v1 bucket directories..."
+docker compose exec -T --user root history-v1 bash -c \
+  "mkdir -p /buckets/project_blobs /buckets/chunks /buckets/analytics /buckets/blobs /buckets/zips && \
+   chmod -R 777 /buckets" \
+  || echo "History buckets will be fixed after history-v1 is ready"
+
 # Install TeX Live in CLSI container
 echo "Installing TeX Live in CLSI container (this takes a few minutes)..."
-$COMPOSE_CMD exec -T --user root clsi bash -c \
+docker compose exec -T --user root clsi bash -c \
   "apt-get update -qq && apt-get install -y texlive-latex-base texlive-latex-recommended texlive-latex-extra texlive-fonts-recommended latexmk qpdf" \
   || echo "TeX Live install will need to be done manually if CLSI is not ready yet"
 
+# Fix filestore blob path restructuring (from underscore to slash format)
+echo "Restructuring blob files for filestore compatibility..."
+sudo docker compose exec -T --user root filestore bash -c '
+cd /buckets/project_blobs 2>/dev/null || mkdir -p /buckets/project_blobs
+if [ -n "$(ls -A 2>/dev/null)" ]; then
+  shopt -s nullglob
+  for f in *_*; do
+    if [ -f "$f" ]; then
+      newpath=$(echo "$f" | sed "s/_/\//g")
+      dir=$(dirname "$newpath")
+      mkdir -p "$dir"
+      cp "$f" "$newpath"
+    fi
+  done
+  echo "Blob files restructured successfully"
+else
+  echo "No blob files found yet (will be created when projects are uploaded)"
+fi
+' || echo "Blob restructuring will need to be done manually after filestore is ready"
+
 # Create admin user
 echo "Creating admin user: ${ADMIN_EMAIL}..."
-$COMPOSE_CMD exec -T web bash -c \
-  "cd /overleaf && node modules/server-ce-scripts/scripts/create-user.js --admin --email=${ADMIN_EMAIL}" \
+docker compose exec -T web bash -c \
+  "cd /overleaf/services/web && node modules/server-ce-scripts/scripts/create-user.js --admin --email=${ADMIN_EMAIL}" \
   || echo "Admin user creation deferred - run manually after services are ready"
 
+echo "[8/8] Deployment completed!"
 echo "========================================="
 echo "Deployment completed: $(date)"
 echo ""
 echo "Access Overleaf at: http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)"
+echo "LiteLLM Proxy at: http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4):4000"
 echo ""
 echo "If admin user creation was deferred, SSH in and run:"
 echo "  cd /opt/overleaf/develop"
 echo "  docker compose exec web bash"
 echo "  node modules/server-ce-scripts/scripts/create-user.js --admin --email=${ADMIN_EMAIL}"
 echo ""
-echo "Check service status with:"
-echo "  cd /opt/overleaf/develop && $COMPOSE_CMD ps"
+echo "Useful commands:"
+echo "  Check service status:"
+echo "    cd /opt/overleaf/develop && docker compose ps"
+echo ""
+echo "  View logs:"
+echo "    docker compose logs web --tail=50 --follow"
+echo ""
+echo "  Restructure blob files (run after uploading projects with images):"
+echo "    docker compose exec --user root filestore bash -c 'cd /buckets/project_blobs && for f in *_*; do newpath=\$(echo \"\$f\" | sed \"s/_/\\//g\"); dir=\$(dirname \"\$newpath\"); mkdir -p \"\$dir\"; cp \"\$f\" \"\$newpath\"; done && echo \"Done\"'"
+echo ""
+echo "  Clean compile cache (if compilation gets stuck):"
+echo "    docker compose exec clsi bash -c \"rm -rf /overleaf/services/clsi/compiles/*/output.* /overleaf/services/clsi/cache/*\""
+echo ""
 echo "========================================="

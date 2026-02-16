@@ -138,6 +138,37 @@ variable "allowed_email_domains" {
 }
 
 # -------------------------------------------------------------------
+# AI Tutor Configuration
+# -------------------------------------------------------------------
+
+variable "openai_api_key" {
+  description = "OpenAI API key for AI Tutor features (required for paper review functionality)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "openai_base_url" {
+  description = "Custom OpenAI API base URL (optional, for using LiteLLM proxy or other OpenAI-compatible endpoints). Leave empty to use default OpenAI API."
+  type        = string
+  default     = ""
+}
+
+variable "litellm_master_key" {
+  description = "Master key for LiteLLM proxy authentication (optional, auto-generated if empty)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "anthropic_api_key" {
+  description = "Anthropic API key for Claude models (optional, only needed if using Claude via LiteLLM)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+# -------------------------------------------------------------------
 # S3 Storage Configuration (for data persistence)
 # -------------------------------------------------------------------
 

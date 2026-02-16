@@ -1,0 +1,17 @@
+[Unit]
+Description=LiteLLM Proxy Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/litellm
+Environment="OPENAI_API_KEY=${OPENAI_API_KEY}"
+Environment="LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}"
+Environment="ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}"
+ExecStart=/usr/local/bin/litellm --config /opt/litellm/config.yaml --port 4000 --host 0.0.0.0
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

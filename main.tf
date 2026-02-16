@@ -6,6 +6,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.0"
+    }
   }
 }
 
@@ -124,6 +128,15 @@ resource "aws_security_group" "overleaf" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  # LiteLLM Proxy
+  ingress {
+    description = "LiteLLM Proxy"
+    from_port   = 4000
+    to_port     = 4000
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
   # All outbound
   egress {
     from_port   = 0
@@ -185,6 +198,12 @@ resource "aws_eip_association" "overleaf" {
 # -------------------------------------------------------------------
 # S3 Storage for Overleaf Data Persistence
 # -------------------------------------------------------------------
+
+# Generate random master key for LiteLLM if not provided
+resource "random_string" "litellm_key" {
+  length  = 32
+  special = false
+}
 
 # S3 Buckets for Overleaf data storage
 resource "aws_s3_bucket" "user_files" {
@@ -441,17 +460,21 @@ resource "aws_instance" "overleaf" {
     OVERLEAF_EMAIL_SMTP_IGNORE_TLS        = var.overleaf_smtp_ignore_tls
     EMAIL_CONFIRMATION_DISABLED           = var.email_confirmation_disabled
     SHARELATEX_ALLOWED_EMAIL_DOMAINS      = var.allowed_email_domains
+    OPENAI_API_KEY                        = var.openai_api_key
+    OPENAI_BASE_URL                       = var.openai_base_url
+    LITELLM_MASTER_KEY                    = var.litellm_master_key != "" ? var.litellm_master_key : "sk-${random_string.litellm_key.result}"
+    ANTHROPIC_API_KEY                     = var.anthropic_api_key
     # S3 configuration
-    ENABLE_S3_STORAGE              = var.enable_s3_storage
-    AWS_REGION                     = var.aws_region
-    S3_USER_FILES_BUCKET           = var.enable_s3_storage ? aws_s3_bucket.user_files[0].id : ""
-    S3_TEMPLATE_FILES_BUCKET       = var.enable_s3_storage ? aws_s3_bucket.template_files[0].id : ""
-    S3_PROJECT_BLOBS_BUCKET        = var.enable_s3_storage ? aws_s3_bucket.project_blobs[0].id : ""
-    S3_CHUNKS_BUCKET               = var.enable_s3_storage ? aws_s3_bucket.chunks[0].id : ""
-    S3_FILESTORE_ACCESS_KEY_ID     = var.enable_s3_storage ? aws_iam_access_key.filestore[0].id : ""
-    S3_FILESTORE_SECRET_ACCESS_KEY = var.enable_s3_storage ? aws_iam_access_key.filestore[0].secret : ""
-    S3_HISTORY_ACCESS_KEY_ID       = var.enable_s3_storage ? aws_iam_access_key.history[0].id : ""
-    S3_HISTORY_SECRET_ACCESS_KEY   = var.enable_s3_storage ? aws_iam_access_key.history[0].secret : ""
+    ENABLE_S3_STORAGE                     = var.enable_s3_storage
+    AWS_REGION                            = var.aws_region
+    S3_USER_FILES_BUCKET                  = var.enable_s3_storage ? aws_s3_bucket.user_files[0].id : ""
+    S3_TEMPLATE_FILES_BUCKET              = var.enable_s3_storage ? aws_s3_bucket.template_files[0].id : ""
+    S3_PROJECT_BLOBS_BUCKET               = var.enable_s3_storage ? aws_s3_bucket.project_blobs[0].id : ""
+    S3_CHUNKS_BUCKET                      = var.enable_s3_storage ? aws_s3_bucket.chunks[0].id : ""
+    S3_FILESTORE_ACCESS_KEY_ID            = var.enable_s3_storage ? aws_iam_access_key.filestore[0].id : ""
+    S3_FILESTORE_SECRET_ACCESS_KEY        = var.enable_s3_storage ? aws_iam_access_key.filestore[0].secret : ""
+    S3_HISTORY_ACCESS_KEY_ID              = var.enable_s3_storage ? aws_iam_access_key.history[0].id : ""
+    S3_HISTORY_SECRET_ACCESS_KEY          = var.enable_s3_storage ? aws_iam_access_key.history[0].secret : ""
   })
 
   # user_data changes should trigger replacement

@@ -83,3 +83,37 @@ email_confirmation_disabled = true  # Set to false to require email verification
 #   allowed_email_domains = "gmail.com,yahoo.com"      # Multiple domains
 #   allowed_email_domains = ""                         # Allow all domains (default)
 allowed_email_domains = ""
+
+# -------------------------------------------------------------------
+# AI Tutor Configuration
+# -------------------------------------------------------------------
+
+# OpenAI API key for AI Tutor paper review features
+# Get your key at: https://platform.openai.com/api-keys
+# Leave empty to disable AI Tutor (you can still use Overleaf normally)
+openai_api_key = ""  # e.g., "sk-proj-xxxxx..."
+
+# Custom OpenAI API base URL (optional)
+# Use this for LiteLLM proxy for cost tracking, rate limiting, etc.
+# When using LiteLLM, set this to "http://localhost:4000" and configure litellm_master_key below
+# Leave empty to use default OpenAI API (https://api.openai.com/v1)
+openai_base_url = ""
+
+# -------------------------------------------------------------------
+# LiteLLM Proxy Configuration (Advanced - for cost tracking)
+# -------------------------------------------------------------------
+
+# Master API key for LiteLLM proxy server (auto-generated if empty)
+# Only needed if you're using LiteLLM proxy for cost tracking and rate limiting
+# The LiteLLM proxy will support these models:
+#   - gpt-4o, gpt-4o-mini
+#   - gpt-4.1, gpt-4.1-mini (if available in your OpenAI account)
+#   - gpt-5.2, gpt-5.2-chat-latest (if available in your OpenAI account)
+#   - gpt-4, gpt-4-turbo, gpt-3.5-turbo (legacy)
+litellm_master_key = ""  # Leave empty to auto-generate
+
+# Anthropic API key for Claude models via LiteLLM (optional)
+# Only needed if you want to add Claude models to the AI Tutor
+# Get your key at: https://console.anthropic.com/account/keys
+anthropic_api_key = ""  # e.g., "sk-ant-xxxxx..."
+
