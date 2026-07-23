@@ -124,7 +124,15 @@ case "$COMMAND" in
     need_target
     "${SSH_TARGET[@]}" "set -e
       sed -i 's|^OVERLEAF_SITE_URL=.*|OVERLEAF_SITE_URL=https://$SERVICE_HOSTNAME|' /home/ubuntu/overleaf/develop/dev.env
-      grep -qx 'OVERLEAF_SITE_URL=https://$SERVICE_HOSTNAME' /home/ubuntu/overleaf/develop/dev.env"
+      sed -i '/^PUBLIC_URL=/d' /home/ubuntu/overleaf/develop/dev.env
+      printf '%s\\n' 'PUBLIC_URL=https://$SERVICE_HOSTNAME' >> /home/ubuntu/overleaf/develop/dev.env
+      grep -qx 'OVERLEAF_SITE_URL=https://$SERVICE_HOSTNAME' /home/ubuntu/overleaf/develop/dev.env
+      grep -qx 'PUBLIC_URL=https://$SERVICE_HOSTNAME' /home/ubuntu/overleaf/develop/dev.env
+      webpack_config=/home/ubuntu/overleaf/develop/webpack.config.dev-env.js
+      grep -q 'hot: false' \"\$webpack_config\" ||
+        sed -i '/devServer: {/a\\    hot: false,\\n    liveReload: false,' \"\$webpack_config\"
+      grep -q 'hot: false' \"\$webpack_config\"
+      grep -q 'liveReload: false' \"\$webpack_config\""
     ;;
   start-http-test)
     need_target
@@ -150,9 +158,10 @@ case "$COMMAND" in
     need_target
     "${SSH_TARGET[@]}" 'set -e
       test "$(git -C /home/ubuntu/overleaf rev-parse HEAD)" = "4b7445035672fd108bdc04490fe6a2458926161f"
-      test "$(git -C /home/ubuntu/overleaf diff --name-only | wc -l)" -eq 2
+      test "$(git -C /home/ubuntu/overleaf diff --name-only | wc -l)" -eq 3
       test "$(git -C /home/ubuntu/overleaf diff --name-only | grep -cx develop/dev.env)" -eq 1
       test "$(git -C /home/ubuntu/overleaf diff --name-only | grep -cx package-lock.json)" -eq 1
+      test "$(git -C /home/ubuntu/overleaf diff --name-only | grep -cx develop/webpack.config.dev-env.js)" -eq 1
       test -z "$(git -C /home/ubuntu/overleaf diff --cached --name-only)"
       test -z "$(git -C /home/ubuntu/overleaf ls-files --others --exclude-standard)"
       cd /home/ubuntu/overleaf/develop
