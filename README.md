@@ -1,178 +1,121 @@
-# Overleaf AI Tutor — Terraform AWS Deployment
+# Overleaf Mentor AWS migration
 
-Deploys the [flecart/overleaf (add-ai-tutor-frontend)](https://github.com/flecart/overleaf/tree/add-ai-tutor-frontend) fork on an AWS EC2 instance using Docker.
-
-## Prerequisites
-
-1. **Terraform >= 1.3** installed ([install guide](https://developer.hashicorp.com/terraform/install))
-2. **AWS CLI** configured with credentials (`aws configure`)
-3. **An EC2 Key Pair** already created in your target AWS region
-
-## Quick Start
-
-```bash
-cd overleaf-terraform
-
-# 1. Configure your variables
-cp terraform.tfvars.example terraform.tfvars
-# Edit terraform.tfvars — at minimum set key_name and admin_email
-
-# 2. (Optional) Test SMTP credentials if configuring email
-python3 scripts/test_gmail_smtp.py
-
-# 3. Initialize and deploy
-terraform init
-terraform plan
-terraform apply
-```
-
-Terraform will output the public IP. The full deployment (Docker build + TeX Live install) takes **15–25 minutes** after the instance launches.
-
-## Checking Deployment Progress
-
-```bash
-# SSH into the instance
-ssh -i <your-key.pem> ubuntu@<public-ip>
-
-# Watch the cloud-init deployment log
-sudo tail -f /var/log/overleaf-deploy.log
-
-# Or check Docker containers
-cd /opt/overleaf/develop && docker compose ps
-```
-
-## Accessing Overleaf
-
-Once deployment is complete, open `http://<public-ip>` in your browser.
-
-The first time, you'll need to activate your admin account. Check the deployment log for the activation URL:
-
-```bash
-sudo grep "activate" /var/log/overleaf-deploy.log
-```
-
-Replace `127.0.0.1:3000` in the URL with your instance's public IP.
-
-## Manual Post-Deployment Steps (if needed)
-
-If any automated steps failed during cloud-init, SSH in and run:
-
-```bash
-cd /opt/overleaf/develop
-
-# Fix upload permissions
-docker compose exec --user root web bash -c \
-  "mkdir -p /overleaf/services/web/data/uploads && chmod 777 /overleaf/services/web/data/uploads"
-
-# Install TeX Live (if not already installed)
-docker compose exec --user root clsi bash -c \
-  "apt-get update -qq && apt-get install -y texlive-latex-base texlive-latex-recommended texlive-latex-extra texlive-fonts-recommended latexmk qpdf"
-
-# Create admin user
-docker compose exec web bash -c \
-  "cd /overleaf && node modules/server-ce-scripts/scripts/create-user.js --admin --email=admin@example.com"
-```
-
-## Tear Down
-
-```bash
-terraform destroy
-```
-
-## Variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `aws_region` | `us-east-1` | AWS region |
-| `instance_type` | `t3.xlarge` | EC2 instance type (4 vCPU / 16GB RAM) |
-| `key_name` | — (required) | Existing EC2 Key Pair name |
-| `admin_email` | `admin@example.com` | Overleaf admin email |
-| `allowed_ssh_cidrs` | `["0.0.0.0/0"]` | CIDRs allowed to SSH |
-| `root_volume_size` | `50` | Root EBS volume size in GB |
-| `data_volume_size` | `50` | Persistent data volume size in GB |
-| `project_name` | `overleaf-ai-tutor` | Name prefix for AWS resources |
-| `use_prebuilt_images` | `false` | Use pre-built Docker images |
-| `docker_image_prefix` | `""` | Docker registry prefix for images |
-| `docker_image_tag` | `"ai-tutor"` | Docker image tag |
-
-### S3 Storage Configuration (Recommended for Production)
-
-| Variable | Default | Description |
-|---|---|---|
-| `enable_s3_storage` | `true` | Enable S3 storage backend for data persistence |
-| `s3_bucket_prefix` | `"overleaf"` | Prefix for S3 bucket names (must be globally unique) |
-
-**Why use S3?**
-- Data persists even when EC2 instance is destroyed and recreated
-- Unlimited scalability without managing disk space
-- 99.999999999% (11 9's) durability
-- Pay only for what you use (~$2-3/month for 50GB)
-
-See [S3_STORAGE_GUIDE.md](./S3_STORAGE_GUIDE.md) for detailed setup and migration instructions.
-
-### Email / SMTP Configuration (Optional)
-
-| Variable | Default | Description |
-|---|---|---|
-| `overleaf_email_from_address` | `""` | Email address shown as sender |
-| `overleaf_smtp_host` | `""` | SMTP server hostname (e.g., smtp.gmail.com) |
-| `overleaf_smtp_port` | `587` | SMTP port (587 for STARTTLS) |
-| `overleaf_smtp_secure` | `false` | Use SSL/TLS (false = STARTTLS) |
-| `overleaf_smtp_user` | `""` | SMTP username (sensitive) |
-| `overleaf_smtp_pass` | `""` | SMTP password/app password (sensitive) |
-| `overleaf_smtp_tls_reject_unauth` | `true` | Reject unauthorized TLS certs |
-| `overleaf_smtp_ignore_tls` | `false` | Ignore TLS (not recommended) |
-
-**Gmail Setup:**
-1. Enable 2-Step Verification on your Google account
-2. Create an App Password at https://myaccount.google.com/apppasswords
-3. Test credentials with: `python3 scripts/test_gmail_smtp.py`
-4. Add credentials to `terraform.tfvars`
+This repository provisions the replacement for the live service at
+`overleaf.safe.eu` in AWS account `906513713427`. It mirrors the
+private `jiarui-liu/overleaf` development stack rather than deploying stock
+Overleaf Toolkit images.
 
 ## Architecture
 
+- Ubuntu 24.04, `t3.large`, in `us-east-1`
+- 40 GiB encrypted, disposable root disk
+- 120 GiB encrypted, deletion-protected data disk
+- Docker, containerd build data, and `/home/ubuntu` stored on the persistent disk
+- Caddy on ports 80/443, forwarding to the webpack service on port 8080
+- SSM instance access plus public IPv4 SSH authenticated by the operator key
+- Versioned and encrypted S3 Terraform state
+
+Terraform intentionally does not manage application credentials. The migration
+copies `/home/ubuntu/overleaf/.env_credentials` directly between machines with
+mode `0600`, so credentials never enter state or cloud-init logs.
+
+## Provisioning
+
+Authenticate the `default` AWS CLI profile to account `906513713427`, then:
+
+```bash
+AWS_PROFILE=default scripts/bootstrap_state.sh
+cp terraform.tfvars.example terraform.tfvars
+terraform init
+scripts/terraform_via_aws_login.sh plan -out=overleaf.tfplan
+scripts/terraform_via_aws_login.sh apply overleaf.tfplan
 ```
-Internet
-    │
-    ▼
-┌─────────────────────────────────────────┐
-│   AWS VPC  10.0.0.0/16                  │
-│  ┌───────────────────────────────────┐  │
-│  │  Public Subnet 10.0.1.0/24         │  │
-│  │  ┌──────────────────────────────┐  │  │
-│  │  │  EC2 Instance (Ubuntu)        │  │  │
-│  │  │                               │  │  │
-│  │  │  Docker Compose:              │  │  │
-│  │  │  - web (Overleaf app)         │◄─┼──┼─── S3 Buckets (optional)
-│  │  │  - mongo (MongoDB 8.0)        │  │  │    - user-files
-│  │  │  - redis (cache)              │  │  │    - template-files
-│  │  │  - clsi (LaTeX compiler)      │  │  │    - project-blobs
-│  │  │  - filestore, history, etc.   │  │  │    - chunks
-│  │  │                               │  │  │
-│  │  │  EBS Volume (persistent)      │  │  │
-│  │  │  - MongoDB data               │  │  │
-│  │  └──────────────────────────────┘  │  │
-│  └───────────────────────────────────┘  │
-└─────────────────────────────────────────┘
+
+Wait for `/var/lib/cloud/overleaf-bootstrap-complete` on the destination before
+migrating. Terraform creates a new key pair from the public key configured by
+`ssh_public_key_path`; it does not use or alter the unrelated `overleaf-key`.
+
+The data volume has `prevent_destroy = true`. A normal `terraform destroy` will
+therefore fail until an operator intentionally removes that protection.
+
+## Migration runbook
+
+Set the destination Elastic IP from `terraform output -raw public_ip`:
+
+```bash
+export TARGET_IP=203.0.113.20
+scripts/migrate_overleaf.sh preflight
+scripts/migrate_overleaf.sh sync-workspace
+scripts/migrate_overleaf.sh build
+scripts/migrate_overleaf.sh start-http-test
 ```
 
-**Storage Options:**
-- **EBS Only**: Data volume persists with `prevent_destroy` lifecycle
-- **EBS + S3** (Recommended): Project files in S3, MongoDB on EBS
-  - Enables easy migration and rebuilds without data loss
-  - See [S3_STORAGE_GUIDE.md](./S3_STORAGE_GUIDE.md) for details
+At this point the disposable, empty-data test service is available at
+`http://<TARGET_IP>`. Create only a fake account. When testing is complete,
+stop it and pre-seed the non-database volumes:
 
-## Cost Estimate
+```bash
+scripts/migrate_overleaf.sh stop-http-test
+scripts/migrate_overleaf.sh sync-data-online
+```
 
-### Compute & Storage
-- **t3.xlarge** in us-east-1: ~$0.1664/hr (~$120/month)
-- **50GB gp3 EBS**: ~$4/month
+The online seed deliberately excludes MongoDB and Redis. Their files are only
+copied by `final-sync` after both stacks are stopped; the fake test account is
+therefore discarded during the final migration.
 
-### S3 Storage (if enabled)
-- **Storage**: ~$0.023/GB/month (~$1.15/month for 50GB)
-- **Requests**: ~$1-2/month for typical usage
-- **Total S3**: ~$2-3/month for small team
+The workspace sync excludes machine credentials and caches (`.ssh`, `.aws`,
+GPG/Docker credentials, histories, `.cache`, and Cursor server state). It keeps
+repositories, datasets, annotations, and Overleaf's dedicated credentials.
 
-**Total (with S3)**: ~$126/month for continuous use
+The private fork currently has a committed `package.json`/`package-lock.json`
+mismatch for `esbuild`. The build command regenerates only `package-lock.json`
+with the Dockerfile's Node 24.13.0 toolchain, verifies no other source files
+changed, and saves the original lockfile outside the repository.
 
-**Tip**: Run `terraform destroy` when not in use to save costs!
+`start-http-test` and `final-sync` set `OVERLEAF_SITE_URL` in the copied
+development environment to `https://<service_hostname>`. This intentional
+runtime hostname change and the repaired lockfile are the only expected source
+tree differences on the destination.
+
+At least one current DNS TTL (approximately two hours) before cutover, ask the
+Toronto DNS administrator to lower the A-record TTL to 60 seconds. During the
+agreed write freeze:
+
+```bash
+scripts/migrate_overleaf.sh final-sync
+scripts/migrate_overleaf.sh validate
+scripts/migrate_overleaf.sh proxy-source
+```
+
+After `proxy-source`, stale DNS clients hitting the old HTTPS endpoint are sent
+to the new machine, while the old application containers remain stopped. The
+DNS administrator can then set:
+
+```text
+overleaf.safe.eu. 60 IN A <TARGET_IP>
+```
+
+Once public DNS resolves to the destination, enable its production TLS site:
+
+```bash
+scripts/migrate_overleaf.sh enable-target-tls
+```
+
+Validate HTTPS, login, an existing project, project history, upload/download,
+LaTeX compilation, and AI-tutor behavior. Then create an encrypted snapshot of
+the destination data volume.
+
+## Rollback
+
+Before users write data to the replacement, restore the old proxy and stack:
+
+```bash
+scripts/migrate_overleaf.sh rollback-proxy
+```
+
+If users have already written to the replacement, do not run the simple
+rollback: first put both systems in maintenance mode and reverse-migrate the
+new MongoDB and volume data to avoid losing those writes.
+
+The approved operating choice leaves the old EC2 instance running as a proxy
+and rollback point, so its original AWS account continues to incur charges.

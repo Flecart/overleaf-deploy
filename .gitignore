@@ -18,3 +18,5 @@ override.tf.json
 .agents/private
 
 manual_deploy.sh
+migration-artifacts/
+terraform.tfvars.generated
